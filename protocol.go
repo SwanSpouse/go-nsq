@@ -9,6 +9,7 @@ import (
 )
 
 // MagicV1 is the initial identifier sent when connecting for V1 clients
+// 首部字段
 var MagicV1 = []byte("  V1")
 
 // MagicV2 is the initial identifier sent when connecting for V2 clients

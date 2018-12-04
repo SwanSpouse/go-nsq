@@ -11,7 +11,7 @@ import (
 )
 
 var byteSpace = []byte(" ")
-var byteNewLine = []byte("\n")
+var byteNewLine = []byte("\n") // 抽时间了解一下\r\n和\n的区别
 
 // Command represents a command from a client to an NSQ daemon
 type Command struct {
@@ -33,16 +33,22 @@ func (c *Command) String() string {
 //
 // It is suggested that the target Writer is buffered
 // to avoid performing many system calls.
+// 格式是首部字段，然后Command名字，然后是空格分割的参数。然后是一个\n 然后才是body
+/*
+IDENTIFY(command name) PARAM1 PARAM2 ...\n
+BODY_LENGTH(4Byte) BODY_CONTENT
+*/
 func (c *Command) WriteTo(w io.Writer) (int64, error) {
+	// 记录此命令的总字节数
 	var total int64
 	var buf [4]byte
-
+	// 首先写入命令名称
 	n, err := w.Write(c.Name)
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
-
+	// 各个param之间是以空格分割的。
 	for _, param := range c.Params {
 		n, err := w.Write(byteSpace)
 		total += int64(n)
@@ -55,28 +61,29 @@ func (c *Command) WriteTo(w io.Writer) (int64, error) {
 			return total, err
 		}
 	}
-
+	// 写入\n
 	n, err = w.Write(byteNewLine)
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
-
+	// 如果消息体内容不为空，则写入body
 	if c.Body != nil {
 		bufs := buf[:]
+		// 首先写入body长度，4个字节
 		binary.BigEndian.PutUint32(bufs, uint32(len(c.Body)))
 		n, err := w.Write(bufs)
 		total += int64(n)
 		if err != nil {
 			return total, err
 		}
+		// 再写入Body内容
 		n, err = w.Write(c.Body)
 		total += int64(n)
 		if err != nil {
 			return total, err
 		}
 	}
-
 	return total, nil
 }
 
@@ -89,6 +96,7 @@ func (c *Command) WriteTo(w io.Writer) (int64, error) {
 // See http://nsq.io/clients/tcp_protocol_spec.html#identify for information
 // on the supported options
 func Identify(js map[string]interface{}) (*Command, error) {
+	// 这个传过去的是个json
 	body, err := json.Marshal(js)
 	if err != nil {
 		return nil, err
