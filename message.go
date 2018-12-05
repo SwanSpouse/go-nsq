@@ -24,7 +24,7 @@ type Message struct {
 
 	NSQDAddress string
 
-	Delegate MessageDelegate
+	Delegate MessageDelegate // 代理模式
 
 	autoResponseDisabled int32
 	responded            int32

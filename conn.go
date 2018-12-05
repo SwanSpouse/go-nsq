@@ -80,7 +80,7 @@ type Conn struct {
 
 	closeFlag int32
 	stopper   sync.Once
-	wg        sync.WaitGroup
+	wg        sync.WaitGroup // 读写连个协程的waitGroup
 
 	readLoopRunning int32
 }
@@ -172,7 +172,7 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 		LocalAddr: c.config.LocalAddr,
 		Timeout:   c.config.DialTimeout,
 	}
-
+	// 通过TCP进行连接
 	conn, err := dialer.Dial("tcp", c.addr)
 	if err != nil {
 		return nil, err
@@ -186,7 +186,7 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 		c.Close()
 		return nil, fmt.Errorf("[%s] failed to write magic - %s", c.addr, err)
 	}
-
+	// 进行IDENTIFY
 	resp, err := c.identify()
 	if err != nil {
 		return nil, err
@@ -206,6 +206,7 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 
 	c.wg.Add(2)
 	atomic.StoreInt32(&c.readLoopRunning, 1)
+	// 进入读写Loop中
 	go c.readLoop()
 	go c.writeLoop()
 	return resp, nil
