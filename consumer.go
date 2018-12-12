@@ -85,13 +85,13 @@ const (
 // reconnection) to any discovered nsqds.
 type Consumer struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	messagesReceived uint64
-	messagesFinished uint64
-	messagesRequeued uint64
+	messagesReceived uint64 // 收到的消息
+	messagesFinished uint64 // 完成的消息
+	messagesRequeued uint64 // 重新入队的消息
 	totalRdyCount    int64
 	backoffDuration  int64
 	backoffCounter   int32
-	maxInFlight      int32
+	maxInFlight      int32 // 处理中的消息
 
 	mtx sync.RWMutex
 
@@ -102,8 +102,8 @@ type Consumer struct {
 	behaviorDelegate interface{}
 
 	id      int64
-	topic   string
-	channel string
+	topic   string // 消费的Topic
+	channel string // 消费的channel
 	config  Config
 
 	rngMtx sync.Mutex
@@ -113,13 +113,13 @@ type Consumer struct {
 
 	backoffMtx sync.Mutex
 
-	incomingMessages chan *Message
+	incomingMessages chan *Message // 接收到的message
 
 	rdyRetryMtx    sync.Mutex
 	rdyRetryTimers map[string]*time.Timer
 
-	pendingConnections map[string]*Conn // 正在连接
-	connections        map[string]*Conn // 当前已经连接
+	pendingConnections map[string]*Conn // 正在连接的NSQD
+	connections        map[string]*Conn // 当前已经连接NSQD
 
 	nsqdTCPAddrs []string // NSQD地址列表
 
@@ -170,7 +170,7 @@ func NewConsumer(topic string, channel string, config *Config) (*Consumer, error
 		logLvl:      LogLevelInfo,
 		maxInFlight: int32(config.MaxInFlight),
 
-		incomingMessages: make(chan *Message),
+		incomingMessages: make(chan *Message), // 这个居然是一个阻塞的chan
 
 		rdyRetryTimers:     make(map[string]*time.Timer),
 		pendingConnections: make(map[string]*Conn),
@@ -206,6 +206,7 @@ func (r *Consumer) Stats() *ConsumerStats {
 	}
 }
 
+// 返回当前的所有连接
 func (r *Consumer) conns() []*Conn {
 	r.mtx.RLock()
 	conns := make([]*Conn, 0, len(r.connections))
@@ -601,7 +602,7 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 	}
 	// 订阅想要进行消费的topic和channel
 	cmd := Subscribe(r.topic, r.channel)
-	// 发送命令
+	// 发送Subscribe命令，先进行Identify
 	err = conn.WriteCommand(cmd)
 	if err != nil {
 		cleanupConnection()
@@ -904,8 +905,7 @@ func (r *Consumer) maybeUpdateRDY(conn *Conn) {
 	inBackoff := r.inBackoff()
 	inBackoffTimeout := r.inBackoffTimeout()
 	if inBackoff || inBackoffTimeout {
-		r.log(LogLevelDebug, "(%s) skip sending RDY inBackoff:%v || inBackoffTimeout:%v",
-			conn, inBackoff, inBackoffTimeout)
+		r.log(LogLevelDebug, "(%s) skip sending RDY inBackoff:%v || inBackoffTimeout:%v", conn, inBackoff, inBackoffTimeout)
 		return
 	}
 

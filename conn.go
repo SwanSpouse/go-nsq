@@ -82,7 +82,7 @@ type Conn struct {
 	stopper   sync.Once
 	wg        sync.WaitGroup // 读写连个协程的waitGroup
 
-	readLoopRunning int32
+	readLoopRunning int32 // 表示是否正在接收消息
 }
 
 // NewConn returns a new Conn instance
@@ -191,7 +191,7 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	// 是否需要认证
 	if resp != nil && resp.AuthRequired {
 		if c.config.AuthSecret == "" {
 			c.log(LogLevelError, "Auth Required")
@@ -203,11 +203,12 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 			return nil, err
 		}
 	}
-
+	// 读和写两个goroutine
 	c.wg.Add(2)
 	atomic.StoreInt32(&c.readLoopRunning, 1)
-	// 进入读写Loop中
+	// 在这里不断的读取消息，然后塞到messageChan中
 	go c.readLoop()
+	// 在这里不断的写入命令
 	go c.writeLoop()
 	return resp, nil
 }
@@ -527,7 +528,7 @@ func (c *Conn) readLoop() {
 			}
 			goto exit
 		}
-
+		// 心跳
 		if frameType == FrameTypeResponse && bytes.Equal(data, []byte("_heartbeat_")) {
 			c.log(LogLevelDebug, "heartbeat received")
 			c.delegate.OnHeartbeat(c)
