@@ -180,7 +180,7 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 	c.conn = conn.(*net.TCPConn)
 	c.r = conn
 	c.w = conn
-
+	// 写入头部字段
 	_, err = c.Write(MagicV2)
 	if err != nil {
 		c.Close()

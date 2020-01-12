@@ -25,24 +25,24 @@ type producerConn interface {
 // and will lazily connect to that instance (and re-connect)
 // when Publish commands are executed.
 type Producer struct {
-	id     int64
-	addr   string
+	id     int64  // 消费者id
+	addr   string // ip
 	conn   producerConn
-	config Config
+	config Config // 配置
 
 	logger   []logger
 	logLvl   LogLevel
 	logGuard sync.RWMutex
 
-	responseChan chan []byte
-	errorChan    chan []byte
-	closeChan    chan int
+	responseChan chan []byte // 返回值 channel
+	errorChan    chan []byte // error channel
+	closeChan    chan int    // close channel
 
-	transactionChan chan *ProducerTransaction
+	transactionChan chan *ProducerTransaction // 事务
 	transactions    []*ProducerTransaction
-	state           int32
+	state           int32 // 状态
 
-	concurrentProducers int32
+	concurrentProducers int32 // 并发的生产者
 	stopFlag            int32
 	exitChan            chan int
 	wg                  sync.WaitGroup
@@ -61,7 +61,7 @@ type ProducerTransaction struct {
 
 func (t *ProducerTransaction) finish() {
 	if t.doneChan != nil {
-		t.doneChan <- t
+		t.doneChan <- t // 向doneChan发送消息表示结束
 	}
 }
 
@@ -69,21 +69,26 @@ func (t *ProducerTransaction) finish() {
 //
 // The only valid way to create a Config is via NewConfig, using a struct literal will panic.
 // After Config is passed into NewProducer the values are no longer mutable (they are copied).
+// 在Config传递到NewProducer之后，这些配置的值是不可变的了
 func NewProducer(addr string, config *Config) (*Producer, error) {
+	// 确保config是通过NewConfig来创建的；如果不是的话会在这里panic
+	// TODO @limingji 这里的这个assert是不是多余了；因为已经在config.Validate()里面进行过验证了
+	// TODO @limingji 这个producer和consumer一样，都重复了
 	config.assertInitialized()
+	// 对配置项进行验证
 	err := config.Validate()
 	if err != nil {
 		return nil, err
 	}
-
+	// 往Producer里面塞各种值
 	p := &Producer{
-		id: atomic.AddInt64(&instCount, 1),
+		id: atomic.AddInt64(&instCount, 1), // 生成producer id
 
-		addr:   addr,
-		config: *config,
+		addr:   addr,    // ip
+		config: *config, // 配置
 
 		logger: make([]logger, int(LogLevelMax+1)),
-		logLvl: LogLevelInfo,
+		logLvl: LogLevelInfo, // 默认的log level 是info
 
 		transactionChan: make(chan *ProducerTransaction),
 		exitChan:        make(chan int),
@@ -92,6 +97,7 @@ func NewProducer(addr string, config *Config) (*Producer, error) {
 	}
 
 	// Set default logger for all log levels
+	// 为不同log level塞上默认的logger
 	l := log.New(os.Stderr, "", log.Flags())
 	for index, _ := range p.logger {
 		p.logger[index] = l
@@ -105,14 +111,16 @@ func NewProducer(addr string, config *Config) (*Producer, error) {
 // This method can be used to verify that a newly-created Producer instance is
 // configured correctly, rather than relying on the lazy "connect on Publish"
 // behavior of a Producer.
+// 通过PING命令向Producer链接的NSQD发送一个命令；以便验证当前的Producer配置的是否正确；而不是说在Publish的时候才发现有问题。
 func (w *Producer) Ping() error {
+	// 首先验证状态是否是已连接
 	if atomic.LoadInt32(&w.state) != StateConnected {
 		err := w.connect()
 		if err != nil {
 			return err
 		}
 	}
-
+	// 写入一个Nop命令
 	return w.conn.WriteCommand(Nop())
 }
 
@@ -288,14 +296,16 @@ func (w *Producer) sendCommandAsync(cmd *Command, doneChan chan *ProducerTransac
 	return nil
 }
 
+// 连接对应的NSQD
 func (w *Producer) connect() error {
+	// 首先加个锁
 	w.guard.Lock()
 	defer w.guard.Unlock()
-
+	// 如果已经停止了， 则不进行连接了；返回一个错误
 	if atomic.LoadInt32(&w.stopFlag) == 1 {
 		return ErrStopped
 	}
-
+	// 这里有一个状态转换自动机
 	switch state := atomic.LoadInt32(&w.state); state {
 	case StateInit:
 	case StateConnected:
@@ -306,21 +316,26 @@ func (w *Producer) connect() error {
 
 	w.log(LogLevelInfo, "(%s) connecting to nsqd", w.addr)
 
+	// 在这里连接nsqd
 	w.conn = NewConn(w.addr, &w.config, &producerConnDelegate{w})
+	// 感觉有点儿复杂啊；这个功能加的
 	w.conn.SetLoggerLevel(w.getLogLevel())
 	for index := range w.logger {
 		w.conn.SetLoggerForLevel(w.logger[index], LogLevel(index), fmt.Sprintf("%3d (%%s)", w.id))
 	}
-
+	// 尝试连接
 	_, err := w.conn.Connect()
 	if err != nil {
 		w.conn.Close()
 		w.log(LogLevelError, "(%s) error connecting to nsqd - %s", w.addr, err)
 		return err
 	}
+	// 标记已经连接上了
 	atomic.StoreInt32(&w.state, StateConnected)
+	// 初始化closeChan
 	w.closeChan = make(chan int)
 	w.wg.Add(1)
+	// 启动一个router
 	go w.router()
 
 	return nil
@@ -340,6 +355,7 @@ func (w *Producer) close() {
 }
 
 func (w *Producer) router() {
+	// 死循环在这里不断的接受命令
 	for {
 		select {
 		case t := <-w.transactionChan:
@@ -402,6 +418,7 @@ func (w *Producer) transactionCleanup() {
 	}
 }
 
+// 其实这里就是一个小的log包
 func (w *Producer) log(lvl LogLevel, line string, args ...interface{}) {
 	logger, logLvl := w.getLogger(lvl)
 

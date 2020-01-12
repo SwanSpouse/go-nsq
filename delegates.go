@@ -10,11 +10,13 @@ type logger interface {
 type LogLevel int
 
 // Log levels
+// log 等级；
 const (
 	LogLevelDebug LogLevel = iota
 	LogLevelInfo
 	LogLevelWarning
 	LogLevelError
+	// 这个写法很有意思噢；相当于给第一个和最后一个变量赋值了；这个iota-1是最大值的意思吗？
 	LogLevelMax = iota - 1 // convenience - match highest log level
 )
 

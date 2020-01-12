@@ -64,6 +64,7 @@ type ConsumerStats struct {
 	Connections      int
 }
 
+// 这里用来记录有多少实例
 var instCount int64
 
 type backoffSignal int
