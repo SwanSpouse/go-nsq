@@ -53,7 +53,7 @@ type Conn struct {
 	maxRdyCount      int64
 	rdyCount         int64
 	lastRdyTimestamp int64
-	lastMsgTimestamp int64
+	lastMsgTimestamp int64 // 上次处理消息的时间
 
 	mtx sync.Mutex
 
@@ -547,6 +547,7 @@ func (c *Conn) readLoop() {
 
 		switch frameType {
 		case FrameTypeResponse:
+			// 收到的是回复
 			c.delegate.OnResponse(c, data)
 		case FrameTypeMessage:
 			// 首先对message进行decode
@@ -559,10 +560,10 @@ func (c *Conn) readLoop() {
 			// 消息也有一个代理
 			msg.Delegate = delegate
 			msg.NSQDAddress = c.String()
-
+			// 处理的消息数据
 			atomic.AddInt64(&c.messagesInFlight, 1)
 			atomic.StoreInt64(&c.lastMsgTimestamp, time.Now().UnixNano())
-
+			// 收到消息的代理
 			c.delegate.OnMessage(c, msg)
 		case FrameTypeError:
 			c.log(LogLevelError, "protocol error - %s", data)

@@ -87,7 +87,7 @@ func (s *FullJitterStrategy) setConfig(cfg *Config) {
 //
 // Use Set(option string, value interface{}) as an alternate way to set parameters
 type Config struct {
-	initialized bool
+	initialized bool // 这里值得学习一下；搞一个局部变量，然后以此来判断config是不是通过特定方法New出来的。
 
 	// used to Initialize, Validate
 	configHandlers []configHandler
