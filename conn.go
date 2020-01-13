@@ -63,7 +63,7 @@ type Conn struct {
 	tlsConn *tls.Conn
 	addr    string
 
-	delegate ConnDelegate
+	delegate ConnDelegate // 这里有一层代理；设计模式
 
 	logger   []logger
 	logLvl   LogLevel
@@ -510,13 +510,15 @@ func (c *Conn) auth(secret string) error {
 	return nil
 }
 
+// 不断的读取消息
 func (c *Conn) readLoop() {
 	delegate := &connMessageDelegate{c}
 	for {
+		// 判断是否已经关闭
 		if atomic.LoadInt32(&c.closeFlag) == 1 {
 			goto exit
 		}
-
+		// 首先读取消息类型
 		frameType, data, err := ReadUnpackedResponse(c)
 		if err != nil {
 			if err == io.EOF && atomic.LoadInt32(&c.closeFlag) == 1 {
@@ -531,7 +533,9 @@ func (c *Conn) readLoop() {
 		// 心跳
 		if frameType == FrameTypeResponse && bytes.Equal(data, []byte("_heartbeat_")) {
 			c.log(LogLevelDebug, "heartbeat received")
+			// 中间过了一层代理
 			c.delegate.OnHeartbeat(c)
+			// 进行回复
 			err := c.WriteCommand(Nop())
 			if err != nil {
 				c.log(LogLevelError, "IO error - %s", err)
@@ -545,12 +549,14 @@ func (c *Conn) readLoop() {
 		case FrameTypeResponse:
 			c.delegate.OnResponse(c, data)
 		case FrameTypeMessage:
+			// 首先对message进行decode
 			msg, err := DecodeMessage(data)
 			if err != nil {
 				c.log(LogLevelError, "IO error - %s", err)
 				c.delegate.OnIOError(c, err)
 				goto exit
 			}
+			// 消息也有一个代理
 			msg.Delegate = delegate
 			msg.NSQDAddress = c.String()
 

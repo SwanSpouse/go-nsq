@@ -33,17 +33,14 @@ func (c *Command) String() string {
 //
 // It is suggested that the target Writer is buffered
 // to avoid performing many system calls.
-<<<<<<< Updated upstream
 // 格式是首部字段，然后Command名字，然后是空格分割的参数。然后是一个\n 然后才是body
 /*
-IDENTIFY(command name) PARAM1 PARAM2 ...\n
-BODY_LENGTH(4Byte) BODY_CONTENT
+   IDENTIFY(command name) PARAM1 PARAM2 ...\n
+   BODY_LENGTH(4Byte) BODY_CONTENT
 */
-=======
 // 写入一个命令
 // 命令第一行是 名称 参数1 参数2 .... \n
 // 命令第二行是 len-body
->>>>>>> Stashed changes
 func (c *Command) WriteTo(w io.Writer) (int64, error) {
 	// 记录此命令的总字节数
 	var total int64
@@ -54,11 +51,8 @@ func (c *Command) WriteTo(w io.Writer) (int64, error) {
 	if err != nil {
 		return total, err
 	}
-<<<<<<< Updated upstream
 	// 各个param之间是以空格分割的。
-=======
 	// 写入参数；先写入空格、然后写入参数
->>>>>>> Stashed changes
 	for _, param := range c.Params {
 		n, err := w.Write(byteSpace)
 		total += int64(n)
@@ -71,21 +65,14 @@ func (c *Command) WriteTo(w io.Writer) (int64, error) {
 			return total, err
 		}
 	}
-<<<<<<< Updated upstream
-	// 写入\n
-=======
 	// 写入一个Newline
->>>>>>> Stashed changes
 	n, err = w.Write(byteNewLine)
 	total += int64(n)
 	if err != nil {
 		return total, err
 	}
-<<<<<<< Updated upstream
 	// 如果消息体内容不为空，则写入body
-=======
 	// 写入body
->>>>>>> Stashed changes
 	if c.Body != nil {
 		// 先写入长度、后写入body
 		bufs := buf[:]

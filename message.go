@@ -150,11 +150,11 @@ func (m *Message) WriteTo(w io.Writer) (int64, error) {
 //                         attempts
 func DecodeMessage(b []byte) (*Message, error) {
 	var msg Message
-
+	// 判断长度是否合法
 	if len(b) < 10+MsgIDLength {
 		return nil, errors.New("not enough data to decode valid message")
 	}
-
+	// 按照上面的消息格式解析message
 	msg.Timestamp = int64(binary.BigEndian.Uint64(b[:8]))
 	msg.Attempts = binary.BigEndian.Uint16(b[8:10])
 	copy(msg.ID[:], b[10:10+MsgIDLength])

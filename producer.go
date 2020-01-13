@@ -59,6 +59,7 @@ type ProducerTransaction struct {
 	Args     []interface{} // the slice of variadic arguments passed to PublishAsync or MultiPublishAsync
 }
 
+// 当前事务结束标志
 func (t *ProducerTransaction) finish() {
 	if t.doneChan != nil {
 		t.doneChan <- t // 向doneChan发送消息表示结束
@@ -359,6 +360,7 @@ func (w *Producer) router() {
 	for {
 		select {
 		case t := <-w.transactionChan:
+			// 事务
 			w.transactions = append(w.transactions, t)
 			err := w.conn.WriteCommand(t.cmd)
 			if err != nil {
@@ -382,6 +384,7 @@ exit:
 	w.log(LogLevelInfo, "exiting router")
 }
 
+// 从transaction数组里面pop出一个事务出来进行处理
 func (w *Producer) popTransaction(frameType int32, data []byte) {
 	t := w.transactions[0]
 	w.transactions = w.transactions[1:]
@@ -397,6 +400,7 @@ func (w *Producer) transactionCleanup() {
 		t.Error = ErrNotConnected
 		t.finish()
 	}
+	// 清空
 	w.transactions = w.transactions[:0]
 
 	// spin and free up any writes that might have raced
