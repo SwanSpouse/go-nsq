@@ -252,11 +252,12 @@ func (w *Producer) DeferredPublish(topic string, delay time.Duration, body []byt
 // the supplied `doneChan` (if specified)
 // will receive a `ProducerTransaction` instance with the supplied variadic arguments
 // and the response error if present
-func (w *Producer) DeferredPublishAsync(topic string, delay time.Duration, body []byte,
-	doneChan chan *ProducerTransaction, args ...interface{}) error {
+// 这个怎么没有Multi呢？
+func (w *Producer) DeferredPublishAsync(topic string, delay time.Duration, body []byte, doneChan chan *ProducerTransaction, args ...interface{}) error {
 	return w.sendCommandAsync(DeferredPublish(topic, delay, body), doneChan, args)
 }
 
+// 同步发送命令
 func (w *Producer) sendCommand(cmd *Command) error {
 	doneChan := make(chan *ProducerTransaction)
 	err := w.sendCommandAsync(cmd, doneChan, nil)
@@ -268,6 +269,7 @@ func (w *Producer) sendCommand(cmd *Command) error {
 	return t.Error
 }
 
+// 异步发送命令
 func (w *Producer) sendCommandAsync(cmd *Command, doneChan chan *ProducerTransaction,
 	args []interface{}) error {
 	// keep track of how many outstanding producers we're dealing with
@@ -437,6 +439,7 @@ func (w *Producer) log(lvl LogLevel, line string, args ...interface{}) {
 	logger.Output(2, fmt.Sprintf("%-4s %3d %s", lvl, w.id, fmt.Sprintf(line, args...)))
 }
 
+// 在这里把data写到responseChan里面
 func (w *Producer) onConnResponse(c *Conn, data []byte) { w.responseChan <- data }
 func (w *Producer) onConnError(c *Conn, data []byte)    { w.errorChan <- data }
 func (w *Producer) onConnHeartbeat(c *Conn)             {}

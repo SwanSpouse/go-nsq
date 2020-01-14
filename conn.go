@@ -73,7 +73,7 @@ type Conn struct {
 	r io.Reader
 	w io.Writer
 
-	cmdChan         chan *Command
+	cmdChan         chan *Command // 发送命令的Chan
 	msgResponseChan chan *msgResponse
 	exitChan        chan int
 	drainReady      chan int
@@ -630,8 +630,7 @@ func (c *Conn) writeLoop() {
 				continue
 			}
 
-			if msgsInFlight == 0 &&
-				atomic.LoadInt32(&c.closeFlag) == 1 {
+			if msgsInFlight == 0 && atomic.LoadInt32(&c.closeFlag) == 1 {
 				c.close()
 				continue
 			}
