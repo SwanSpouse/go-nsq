@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// Producer对接Tcp的接口抽象
 type producerConn interface {
 	String() string
 	SetLogger(logger, LogLevel, string)
@@ -25,38 +26,38 @@ type producerConn interface {
 // and will lazily connect to that instance (and re-connect)
 // when Publish commands are executed.
 type Producer struct {
-	id     int64  // 消费者id
-	addr   string // ip
-	conn   producerConn
-	config Config // 配置
+	id     int64        // 消费者id
+	addr   string       // ip
+	conn   producerConn // producer 的Tcp连接
+	config Config       // 配置
 
-	logger   []logger
-	logLvl   LogLevel
-	logGuard sync.RWMutex
+	logger   []logger     // 不同log level的logger
+	logLvl   LogLevel     //
+	logGuard sync.RWMutex // setLogger的时候还需要控制并发
 
 	responseChan chan []byte // 返回值 channel
 	errorChan    chan []byte // error channel
 	closeChan    chan int    // close channel
 
-	transactionChan chan *ProducerTransaction // 事务
-	transactions    []*ProducerTransaction
-	state           int32 // 状态
+	transactionChan chan *ProducerTransaction // 所有的command都会转成一个事务
+	transactions    []*ProducerTransaction    // 把接收到的事务添加到数组里
+	state           int32                     // 状态
 
-	concurrentProducers int32 // 并发的生产者
-	stopFlag            int32
-	exitChan            chan int
-	wg                  sync.WaitGroup
-	guard               sync.Mutex
+	concurrentProducers int32          // 并发的生产者
+	stopFlag            int32          // 停止标识 这个东西只在启动和链接的时候用到了
+	exitChan            chan int       // 退出channel
+	wg                  sync.WaitGroup //
+	guard               sync.Mutex     //
 }
 
 // ProducerTransaction is returned by the async publish methods
 // to retrieve metadata about the command after the
 // response is received.
 type ProducerTransaction struct {
-	cmd      *Command
+	cmd      *Command // 命令
 	doneChan chan *ProducerTransaction
 	Error    error         // the error (or nil) of the publish command
-	Args     []interface{} // the slice of variadic arguments passed to PublishAsync or MultiPublishAsync
+	Args     []interface{} // the slice of variadic arguments passed to PublishAsync or MultiPublishAsync 参数
 }
 
 // 当前事务结束标志
@@ -283,19 +284,18 @@ func (w *Producer) sendCommandAsync(cmd *Command, doneChan chan *ProducerTransac
 			return err
 		}
 	}
-
+	// 构造一个事务
 	t := &ProducerTransaction{
-		cmd:      cmd,
-		doneChan: doneChan,
-		Args:     args,
+		cmd:      cmd,      // 命令
+		doneChan: doneChan, // 结束标志
+		Args:     args,     // 命令参数
 	}
-
+	// 在这里通过这种方式来进行同步、异步控制
 	select {
 	case w.transactionChan <- t:
 	case <-w.exitChan:
 		return ErrStopped
 	}
-
 	return nil
 }
 
@@ -357,19 +357,23 @@ func (w *Producer) close() {
 	}()
 }
 
+// 在这里会和直接和Tcp来打交道
 func (w *Producer) router() {
 	// 死循环在这里不断的接受命令
 	for {
 		select {
 		case t := <-w.transactionChan:
-			// 事务
+			// 接收到发送的命令、 事务
+			// 把所有接受到的事务添加到数组里
 			w.transactions = append(w.transactions, t)
+			// 向TcpConn中写入命令
 			err := w.conn.WriteCommand(t.cmd)
 			if err != nil {
 				w.log(LogLevelError, "(%s) sending command - %s", w.conn.String(), err)
 				w.close()
 			}
 		case data := <-w.responseChan:
+			// 多个command组成一组事务
 			w.popTransaction(FrameTypeResponse, data)
 		case data := <-w.errorChan:
 			w.popTransaction(FrameTypeError, data)
@@ -389,6 +393,7 @@ exit:
 // 从transaction数组里面pop出一个事务出来进行处理
 func (w *Producer) popTransaction(frameType int32, data []byte) {
 	t := w.transactions[0]
+	// 不断的销毁transaction
 	w.transactions = w.transactions[1:]
 	if frameType == FrameTypeError {
 		t.Error = ErrProtocol{string(data)}

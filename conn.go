@@ -39,8 +39,8 @@ type AuthResponse struct {
 type msgResponse struct {
 	msg     *Message
 	cmd     *Command
-	success bool
-	backoff bool
+	success bool // 是否成功
+	backoff bool // 补偿
 }
 
 // Conn represents a connection to nsqd
@@ -50,33 +50,33 @@ type msgResponse struct {
 type Conn struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 	messagesInFlight int64
-	maxRdyCount      int64
+	maxRdyCount      int64 // 默认2500 和nsqd协商之后的最大连接数???
 	rdyCount         int64
 	lastRdyTimestamp int64
 	lastMsgTimestamp int64 // 上次处理消息的时间
 
 	mtx sync.Mutex
 
-	config *Config
+	config *Config //  配置
 
-	conn    *net.TCPConn
-	tlsConn *tls.Conn
-	addr    string
+	conn    *net.TCPConn // TCP 连接
+	tlsConn *tls.Conn    //
+	addr    string       // 目标addr
 
 	delegate ConnDelegate // 这里有一层代理；设计模式
 
-	logger   []logger
-	logLvl   LogLevel
+	logger   []logger // 不同log level的logger
+	logLvl   LogLevel //
 	logFmt   []string
 	logGuard sync.RWMutex
 
-	r io.Reader
-	w io.Writer
+	r io.Reader // tcp reader
+	w io.Writer // tcp writer
 
 	cmdChan         chan *Command // 发送命令的Chan
 	msgResponseChan chan *msgResponse
 	exitChan        chan int
-	drainReady      chan int
+	drainReady      chan int // 一直阻塞直到关闭，用来控制clean
 
 	closeFlag int32
 	stopper   sync.Once
@@ -96,7 +96,7 @@ func NewConn(addr string, config *Config, delegate ConnDelegate) *Conn {
 		config:   config,
 		delegate: delegate,
 
-		maxRdyCount:      2500,
+		maxRdyCount:      2500, // 初始值
 		lastMsgTimestamp: time.Now().UnixNano(),
 
 		cmdChan:         make(chan *Command),
@@ -214,8 +214,10 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 }
 
 // Close idempotently initiates connection close
+// 关闭连接
 func (c *Conn) Close() error {
 	atomic.StoreInt32(&c.closeFlag, 1)
+	// 如果这里的messageInFlight!=0的话就不关闭吗？
 	if c.conn != nil && atomic.LoadInt64(&c.messagesInFlight) == 0 {
 		return c.conn.CloseRead()
 	}
@@ -290,8 +292,9 @@ func (c *Conn) Write(p []byte) (int, error) {
 // WriteCommand is a goroutine safe method to write a Command
 // to this connection, and flush.
 func (c *Conn) WriteCommand(cmd *Command) error {
+	// 针对每个Command对象来进行并发控制
 	c.mtx.Lock()
-
+	// 在这里发送Tcp数据
 	_, err := cmd.WriteTo(c)
 	if err != nil {
 		goto exit
@@ -512,6 +515,7 @@ func (c *Conn) auth(secret string) error {
 
 // 不断的读取消息
 func (c *Conn) readLoop() {
+	// 在这里构造一个消息代理
 	delegate := &connMessageDelegate{c}
 	for {
 		// 判断是否已经关闭
@@ -590,9 +594,11 @@ exit:
 	c.log(LogLevelInfo, "readLoop exiting")
 }
 
+// writeLoop 这个是干什么的呢？
 func (c *Conn) writeLoop() {
 	for {
 		select {
+		// 标记是否退出
 		case <-c.exitChan:
 			c.log(LogLevelInfo, "breaking out of writeLoop")
 			// Indicate drainReady because we will not pull any more off msgResponseChan
@@ -680,8 +686,11 @@ func (c *Conn) close() {
 	})
 }
 
+// producer关闭
 func (c *Conn) cleanup() {
+	// 这个做法不错，如果没有close的话就会一直卡在这里
 	<-c.drainReady
+	// 关闭之前等多久
 	ticker := time.NewTicker(100 * time.Millisecond)
 	lastWarning := time.Now()
 	// writeLoop has exited, drain any remaining in flight messages
@@ -716,6 +725,7 @@ func (c *Conn) cleanup() {
 	}
 
 exit:
+	// 把计时器停掉
 	ticker.Stop()
 	c.wg.Done()
 	c.log(LogLevelInfo, "finished draining, cleanup exiting")
@@ -730,10 +740,12 @@ func (c *Conn) waitForCleanup() {
 	c.delegate.OnClose(c)
 }
 
+// 消息成功消费
 func (c *Conn) onMessageFinish(m *Message) {
 	c.msgResponseChan <- &msgResponse{msg: m, cmd: Finish(m.ID), success: true}
 }
 
+// 消息重新入队
 func (c *Conn) onMessageRequeue(m *Message, delay time.Duration, backoff bool) {
 	if delay == -1 {
 		// linear delay
