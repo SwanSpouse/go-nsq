@@ -128,6 +128,7 @@ type producerConnDelegate struct {
 	w *Producer
 }
 
+// 为啥这里的producerConnDelegate OnMessageFinished啥的这些啥工作都不做呢？
 func (d *producerConnDelegate) OnResponse(c *Conn, data []byte)       { d.w.onConnResponse(c, data) }
 func (d *producerConnDelegate) OnError(c *Conn, data []byte)          { d.w.onConnError(c, data) }
 func (d *producerConnDelegate) OnMessage(c *Conn, m *Message)         {}

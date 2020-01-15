@@ -49,7 +49,7 @@ type msgResponse struct {
 // various events that occur on a connection
 type Conn struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
-	messagesInFlight int64
+	messagesInFlight int64 // 在处理中的消息条数
 	maxRdyCount      int64 // 默认2500 和nsqd协商之后的最大连接数???
 	rdyCount         int64
 	lastRdyTimestamp int64
@@ -94,7 +94,7 @@ func NewConn(addr string, config *Config, delegate ConnDelegate) *Conn {
 		addr: addr,
 
 		config:   config,
-		delegate: delegate,
+		delegate: delegate, // 代理
 
 		maxRdyCount:      2500, // 初始值
 		lastMsgTimestamp: time.Now().UnixNano(),
@@ -548,7 +548,6 @@ func (c *Conn) readLoop() {
 			}
 			continue
 		}
-
 		switch frameType {
 		case FrameTypeResponse:
 			// 收到的是回复
@@ -612,19 +611,27 @@ func (c *Conn) writeLoop() {
 				continue
 			}
 		case resp := <-c.msgResponseChan:
+			// 消息发送出去之后会在这里接收到返回值
 			// Decrement this here so it is correct even if we can't respond to nsqd
+			// 这个是代表在处理中的消息
 			msgsInFlight := atomic.AddInt64(&c.messagesInFlight, -1)
-
+			// 写入成功
 			if resp.success {
 				c.log(LogLevelDebug, "FIN %s", resp.msg.ID)
+				// 这里啥也没做
 				c.delegate.OnMessageFinished(c, resp.msg)
+				// 这里也啥都没做
 				c.delegate.OnResume(c)
 			} else {
+				// 写入失败
 				c.log(LogLevelDebug, "REQ %s", resp.msg.ID)
+				// 这里也啥也没做
 				c.delegate.OnMessageRequeued(c, resp.msg)
 				if resp.backoff {
+					// 这里也啥都没做
 					c.delegate.OnBackoff(c)
 				} else {
+					// 这里也啥都没做
 					c.delegate.OnContinue(c)
 				}
 			}

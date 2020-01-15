@@ -66,7 +66,7 @@ func TestProducerPing(t *testing.T) {
 	defer log.SetOutput(os.Stdout)
 
 	config := NewConfig()
-	w, _ := NewProducer("127.0.0.1:4150", config)
+	w, _ := NewProducer("0.0.0.0:32772", config)
 	w.SetLogger(nullLogger, LogLevelInfo)
 
 	err := w.Ping()
@@ -88,7 +88,7 @@ func TestProducerPublish(t *testing.T) {
 	msgCount := 10
 
 	config := NewConfig()
-	w, _ := NewProducer("127.0.0.1:4150", config)
+	w, _ := NewProducer("0.0.0.0:32772", config)
 	w.SetLogger(nullLogger, LogLevelInfo)
 	defer w.Stop()
 
@@ -268,7 +268,7 @@ func readMessages(topicName string, t *testing.T, msgCount int) {
 	}
 	q.AddHandler(h)
 
-	err := q.ConnectToNSQD("127.0.0.1:4150")
+	err := q.ConnectToNSQD("0.0.0.0:32772")
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
