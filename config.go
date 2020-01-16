@@ -224,6 +224,7 @@ func (c *Config) Set(option string, value interface{}) error {
 	return fmt.Errorf("invalid option %s", option)
 }
 
+// 和producer一样，需要保证是New出来的
 func (c *Config) assertInitialized() {
 	if !c.initialized {
 		panic("Config{} must be created with NewConfig()")

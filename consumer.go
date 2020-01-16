@@ -90,34 +90,34 @@ type Consumer struct {
 	messagesFinished uint64 // 完成的消息
 	messagesRequeued uint64 // 重新入队的消息
 	totalRdyCount    int64
-	backoffDuration  int64
-	backoffCounter   int32
+	backoffDuration  int64 // 补偿时延
+	backoffCounter   int32 // 补偿计数
 	maxInFlight      int32 // 处理中的消息
 
-	mtx sync.RWMutex
+	mtx sync.RWMutex // 锁
 
-	logger   []logger
-	logLvl   LogLevel
-	logGuard sync.RWMutex
+	logger   []logger     // logger
+	logLvl   LogLevel     // log level
+	logGuard sync.RWMutex // 修改logger的RW锁
 
 	behaviorDelegate interface{}
 
 	id      int64
 	topic   string // 消费的Topic
 	channel string // 消费的channel
-	config  Config
+	config  Config // 配置
 
 	rngMtx sync.Mutex
 	rng    *rand.Rand
 
 	needRDYRedistributed int32
 
-	backoffMtx sync.Mutex
+	backoffMtx sync.Mutex // 补偿锁
 
 	incomingMessages chan *Message // 接收到的message
 
-	rdyRetryMtx    sync.Mutex
-	rdyRetryTimers map[string]*time.Timer
+	rdyRetryMtx    sync.Mutex             // 重试锁
+	rdyRetryTimers map[string]*time.Timer // 重试timer
 
 	pendingConnections map[string]*Conn // 正在连接的NSQD
 	connections        map[string]*Conn // 当前已经连接NSQD
