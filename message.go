@@ -27,7 +27,7 @@ type Message struct {
 	Delegate MessageDelegate // 代理模式
 
 	autoResponseDisabled int32
-	responded            int32
+	responded            int32 // 消息是否被回复
 }
 
 // NewMessage creates a Message, initializes some metadata,

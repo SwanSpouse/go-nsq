@@ -51,7 +51,7 @@ type Conn struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 	messagesInFlight int64 // 在处理中的消息条数
 	maxRdyCount      int64 // 默认2500 和nsqd协商之后的最大连接数???
-	rdyCount         int64
+	rdyCount         int64 // 用于流量控制； rdyCount表示客户端还可以接受多少条消息
 	lastRdyTimestamp int64
 	lastMsgTimestamp int64 // 上次处理消息的时间
 
@@ -167,6 +167,7 @@ func (c *Conn) getLogLevel() LogLevel {
 
 // Connect dials and bootstraps the nsqd connection
 // (including IDENTIFY) and returns the IdentifyResponse
+// 尝试进行连接
 func (c *Conn) Connect() (*IdentifyResponse, error) {
 	dialer := &net.Dialer{
 		LocalAddr: c.config.LocalAddr,

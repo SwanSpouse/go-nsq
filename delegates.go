@@ -17,6 +17,7 @@ const (
 	LogLevelWarning
 	LogLevelError
 	// 这个写法很有意思噢；相当于给第一个和最后一个变量赋值了；这个iota-1是最大值的意思吗？
+	// 在这里LogLevelMax = 3
 	LogLevelMax = iota - 1 // convenience - match highest log level
 )
 

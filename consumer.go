@@ -44,6 +44,7 @@ func (h HandlerFunc) HandleMessage(m *Message) error {
 
 // DiscoveryFilter is an interface accepted by `SetBehaviorDelegate()`
 // for filtering the nsqds returned from discovery via nsqlookupd
+// 在这里可以对特定的nsqd进行过滤
 type DiscoveryFilter interface {
 	Filter([]string) []string
 }
@@ -110,7 +111,7 @@ type Consumer struct {
 	rngMtx sync.Mutex
 	rng    *rand.Rand
 
-	needRDYRedistributed int32
+	needRDYRedistributed int32 // 是否需要重新分配下RDY
 
 	backoffMtx sync.Mutex // 补偿锁
 
@@ -132,7 +133,7 @@ type Consumer struct {
 	wg              sync.WaitGroup
 	runningHandlers int32
 	stopFlag        int32
-	connectedFlag   int32
+	connectedFlag   int32 // 是否连接NSQD的标志
 	stopHandler     sync.Once
 	exitHandler     sync.Once
 
@@ -163,9 +164,9 @@ func NewConsumer(topic string, channel string, config *Config) (*Consumer, error
 	r := &Consumer{
 		id: atomic.AddInt64(&instCount, 1),
 
-		topic:   topic,
-		channel: channel,
-		config:  *config,
+		topic:   topic,   // 要消费的topic
+		channel: channel, // 所处的channel
+		config:  *config, // 配置
 
 		logger:      make([]logger, LogLevelMax+1),
 		logLvl:      LogLevelInfo,
@@ -179,7 +180,7 @@ func NewConsumer(topic string, channel string, config *Config) (*Consumer, error
 
 		lookupdRecheckChan: make(chan int, 1),
 
-		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())), // 随机种子
 
 		StopChan: make(chan int),
 		exitChan: make(chan int),
@@ -190,7 +191,6 @@ func NewConsumer(topic string, channel string, config *Config) (*Consumer, error
 	for index := range r.logger {
 		r.logger[index] = l
 	}
-
 	r.wg.Add(1)
 	// 启动consumer
 	go r.rdyLoop()
@@ -289,10 +289,11 @@ func (r *Consumer) SetBehaviorDelegate(cb interface{}) {
 //
 // This may change dynamically based on the number of connections to nsqd the Consumer
 // is responsible for.
+// 每个conn最多能够同时处理的message数量
 func (r *Consumer) perConnMaxInFlight() int64 {
 	b := float64(r.getMaxInFlight())
-	s := b / float64(len(r.conns()))
-	return int64(math.Min(math.Max(1, s), b))
+	s := b / float64(len(r.conns()))          // 平均每个conn处理中的消息数
+	return int64(math.Min(math.Max(1, s), b)) // 最小值是1
 }
 
 // IsStarved indicates whether any connections for this consumer are blocked on processing
@@ -308,6 +309,7 @@ func (r *Consumer) IsStarved() bool {
 	return false
 }
 
+// 获取当前正在处理的消息数
 func (r *Consumer) getMaxInFlight() int32 {
 	return atomic.LoadInt32(&r.maxInFlight)
 }
@@ -337,20 +339,23 @@ func (r *Consumer) ChangeMaxInFlight(maxInFlight int) {
 //
 // A goroutine is spawned to handle continual polling.
 func (r *Consumer) ConnectToNSQLookupd(addr string) error {
+	// 判断consumer的状态
 	if atomic.LoadInt32(&r.stopFlag) == 1 {
 		return errors.New("consumer stopped")
 	}
+	// 判断handler的个数
 	if atomic.LoadInt32(&r.runningHandlers) == 0 {
 		return errors.New("no handlers")
 	}
-
+	// 验证addr是否有效
 	if err := validatedLookupAddr(addr); err != nil {
 		return err
 	}
-
+	// 标志已经连接
 	atomic.StoreInt32(&r.connectedFlag, 1)
 
 	r.mtx.Lock()
+	// 判断是否已经连接过了
 	for _, x := range r.lookupdHTTPAddrs {
 		if x == addr {
 			r.mtx.Unlock()
@@ -379,8 +384,10 @@ func (r *Consumer) ConnectToNSQLookupd(addr string) error {
 // producers for the configured topic.
 //
 // A goroutine is spawned to handle continual polling.
+// 和NSQLoopupd进行连接
 func (r *Consumer) ConnectToNSQLookupds(addresses []string) error {
 	for _, addr := range addresses {
+		// 依次进行连接
 		err := r.ConnectToNSQLookupd(addr)
 		if err != nil {
 			return err
@@ -389,6 +396,7 @@ func (r *Consumer) ConnectToNSQLookupds(addresses []string) error {
 	return nil
 }
 
+// 验证地址是否有效
 func validatedLookupAddr(addr string) error {
 	if strings.Contains(addr, "/") {
 		_, err := url.Parse(addr)
@@ -441,17 +449,21 @@ exit:
 
 // return the next lookupd endpoint to query
 // keeping track of which one was last used
+// 查询Lookupd的位置
 func (r *Consumer) nextLookupdEndpoint() string {
 	r.mtx.RLock()
+	// 如果index已经越界，则归0
 	if r.lookupdQueryIndex >= len(r.lookupdHTTPAddrs) {
 		r.lookupdQueryIndex = 0
 	}
+	// 拿出来一个地址
 	addr := r.lookupdHTTPAddrs[r.lookupdQueryIndex]
+	// 备选地址的数量
 	num := len(r.lookupdHTTPAddrs)
 	r.mtx.RUnlock()
 	// 向后移一位
 	r.lookupdQueryIndex = (r.lookupdQueryIndex + 1) % num
-
+	// 拼成http地址
 	urlString := addr
 	if !strings.Contains(urlString, "://") {
 		urlString = "http://" + addr
@@ -463,7 +475,7 @@ func (r *Consumer) nextLookupdEndpoint() string {
 	if u.Path == "/" || u.Path == "" {
 		u.Path = "/lookup"
 	}
-
+	// 写入参数
 	v, err := url.ParseQuery(u.RawQuery)
 	v.Add("topic", r.topic)
 	u.RawQuery = v.Encode()
@@ -471,9 +483,9 @@ func (r *Consumer) nextLookupdEndpoint() string {
 }
 
 type lookupResp struct {
-	Channels  []string    `json:"channels"`
-	Producers []*peerInfo `json:"producers"`
-	Timestamp int64       `json:"timestamp"`
+	Channels  []string    `json:"channels"`  // topic下的所有channel
+	Producers []*peerInfo `json:"producers"` // 对应的producer
+	Timestamp int64       `json:"timestamp"` // 时间戳
 }
 
 type peerInfo struct {
@@ -489,6 +501,7 @@ type peerInfo struct {
 // which nsqd's provide the topic we are consuming.
 //
 // initiate a connection to any new producers that are identified.
+// 向Loopupd查询指定topic NSQD的位置
 func (r *Consumer) queryLookupd() {
 	retries := 0
 
@@ -521,6 +534,7 @@ retry:
 		nsqdAddrs = discoveryFilter.Filter(nsqdAddrs)
 	}
 	// 依次连接所有的NSQD
+	// 这里要连接所有的NSQD？
 	for _, addr := range nsqdAddrs {
 		err = r.ConnectToNSQD(addr)
 		if err != nil && err != ErrAlreadyConnected {
@@ -560,7 +574,7 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 	}
 	// 首先标记为已连接
 	atomic.StoreInt32(&r.connectedFlag, 1)
-
+	// 创建一个连接
 	conn := NewConn(addr, &r.config, &consumerConnDelegate{r})
 	conn.SetLoggerLevel(r.getLogLevel())
 	for index := range r.logger {
@@ -597,11 +611,11 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 	}
 	if resp != nil {
 		if resp.MaxRdyCount < int64(r.getMaxInFlight()) {
-			r.log(LogLevelWarning, "(%s) max RDY count %d < consumer max in flight %d, truncation possible",
-				conn.String(), resp.MaxRdyCount, r.getMaxInFlight())
+			r.log(LogLevelWarning, "(%s) max RDY count %d < consumer max in flight %d, truncation possible", conn.String(), resp.MaxRdyCount, r.getMaxInFlight())
 		}
 	}
 	// 订阅想要进行消费的topic和channel
+	// 订阅相关的Topic和Channel
 	cmd := Subscribe(r.topic, r.channel)
 	// 发送Subscribe命令，先进行Identify
 	err = conn.WriteCommand(cmd)
@@ -610,6 +624,7 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 		return fmt.Errorf("[%s] failed to subscribe to %s:%s - %s", conn, r.topic, r.channel, err.Error())
 	}
 	r.mtx.Lock()
+	// 从pending挪到connections中
 	delete(r.pendingConnections, addr)
 	r.connections[addr] = conn
 	r.mtx.Unlock()
@@ -621,6 +636,7 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 	return nil
 }
 
+// 查找是否已经存在
 func indexOf(n string, h []string) int {
 	for i, a := range h {
 		if n == a {
@@ -894,6 +910,7 @@ func (r *Consumer) resume() {
 	atomic.StoreInt64(&r.backoffDuration, 0)
 }
 
+// 是否在补偿中
 func (r *Consumer) inBackoff() bool {
 	return atomic.LoadInt32(&r.backoffCounter) > 0
 }
@@ -902,6 +919,7 @@ func (r *Consumer) inBackoffTimeout() bool {
 	return atomic.LoadInt64(&r.backoffDuration) > 0
 }
 
+// 消费者处理完一条消息之后会更新成RDY
 func (r *Consumer) maybeUpdateRDY(conn *Conn) {
 	inBackoff := r.inBackoff()
 	inBackoffTimeout := r.inBackoffTimeout()
@@ -909,7 +927,7 @@ func (r *Consumer) maybeUpdateRDY(conn *Conn) {
 		r.log(LogLevelDebug, "(%s) skip sending RDY inBackoff:%v || inBackoffTimeout:%v", conn, inBackoff, inBackoffTimeout)
 		return
 	}
-
+	// 获取平均每个conn最大积压消息数量
 	count := r.perConnMaxInFlight()
 	r.log(LogLevelDebug, "(%s) sending RDY %d", conn, count)
 	r.updateRDY(conn, count)
@@ -932,11 +950,12 @@ exit:
 	r.wg.Done()
 }
 
+//
 func (r *Consumer) updateRDY(c *Conn, count int64) error {
+	// consumer 已经要关闭了
 	if c.IsClosing() {
 		return ErrClosing
 	}
-
 	// never exceed the nsqd's configured max RDY count
 	if count > c.MaxRDY() {
 		count = c.MaxRDY()
@@ -991,10 +1010,13 @@ func (r *Consumer) sendRDY(c *Conn, count int64) error {
 	return nil
 }
 
+// 重新分配RDY字段
+// 流量控制
 func (r *Consumer) redistributeRDY() {
 	if r.inBackoffTimeout() {
 		return
 	}
+	// heuristic 启发式的
 	// if an external heuristic set needRDYRedistributed we want to wait
 	// until we can actually redistribute to proceed
 	conns := r.conns()
@@ -1096,6 +1118,7 @@ func (r *Consumer) stopHandlers() {
 // This panics if called after connecting to NSQD or NSQ Lookupd
 //
 // (see Handler or HandlerFunc for details on implementing this interface)
+// 给consumer设置Message Handler
 func (r *Consumer) AddHandler(handler Handler) {
 	r.AddConcurrentHandlers(handler, 1)
 }
@@ -1107,6 +1130,7 @@ func (r *Consumer) AddHandler(handler Handler) {
 // This panics if called after connecting to NSQD or NSQ Lookupd
 //
 // (see Handler or HandlerFunc for details on implementing this interface)
+// 并发的Handler
 func (r *Consumer) AddConcurrentHandlers(handler Handler, concurrency int) {
 	// 已经连接上了之后就不允许改变了
 	if atomic.LoadInt32(&r.connectedFlag) == 1 {
@@ -1115,11 +1139,13 @@ func (r *Consumer) AddConcurrentHandlers(handler Handler, concurrency int) {
 	// 并发量
 	atomic.AddInt32(&r.runningHandlers, int32(concurrency))
 	for i := 0; i < concurrency; i++ {
-		//  go 出去
+		//  go 出去 启动多个handler 来处理消息
 		go r.handlerLoop(handler)
 	}
 }
 
+// 在这里处理接收到的消息
+// 这是其中一个handler
 func (r *Consumer) handlerLoop(handler Handler) {
 	r.log(LogLevelDebug, "starting Handler")
 	for {
@@ -1128,15 +1154,16 @@ func (r *Consumer) handlerLoop(handler Handler) {
 		if !ok {
 			goto exit
 		}
-
+		// 判断消息是否应该判定为失败
 		if r.shouldFailMessage(message, handler) {
 			message.Finish()
 			continue
 		}
-
+		// 在这里处理消息
 		err := handler.HandleMessage(message)
 		if err != nil {
 			r.log(LogLevelError, "Handler returned error (%s) for msg %s", err, message.ID)
+			// 判断自动回复是否开启
 			if !message.IsAutoResponseDisabled() {
 				message.Requeue(-1)
 			}
@@ -1157,6 +1184,7 @@ exit:
 
 func (r *Consumer) shouldFailMessage(message *Message, handler interface{}) bool {
 	// message passed the max number of attempts
+	// 如果已经尝试的次数大于MaxAttempts的数量
 	if r.config.MaxAttempts > 0 && message.Attempts > r.config.MaxAttempts {
 		r.log(LogLevelWarning, "msg %s attempted %d times, giving up", message.ID, message.Attempts)
 
@@ -1164,7 +1192,6 @@ func (r *Consumer) shouldFailMessage(message *Message, handler interface{}) bool
 		if ok {
 			logger.LogFailedMessage(message)
 		}
-
 		return true
 	}
 	return false

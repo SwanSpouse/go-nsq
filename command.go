@@ -186,6 +186,7 @@ func MultiPublish(topic string, bodies [][]byte) (*Command, error) {
 }
 
 // Subscribe creates a new Command to subscribe to the given topic/channel
+// 从channel来订阅Topic
 func Subscribe(topic string, channel string) *Command {
 	var params = [][]byte{[]byte(topic), []byte(channel)}
 	return &Command{[]byte("SUB"), params, nil}

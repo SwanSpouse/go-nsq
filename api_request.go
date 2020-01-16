@@ -46,46 +46,47 @@ type wrappedResp struct {
 }
 
 // stores the result in the value pointed to by ret(must be a pointer)
+// HTTP请求
 func apiRequestNegotiateV1(method string, endpoint string, body io.Reader, ret interface{}) error {
+	// 在这里设置超时时间
 	httpclient := &http.Client{Transport: newDeadlineTransport(2 * time.Second)}
+	// 创建一个request
 	req, err := http.NewRequest(method, endpoint, body)
 	if err != nil {
 		return err
 	}
-
+	// 写入参数
 	req.Header.Add("Accept", "application/vnd.nsq; version=1.0")
-
+	// 发送请求
 	resp, err := httpclient.Do(req)
 	if err != nil {
 		return err
 	}
-
+	// 读取返回值
 	respBody, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
 		return err
 	}
-
+	// 判断请求状态码
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("got response %s %q", resp.Status, respBody)
 	}
-
+	// 看body是否为空，为空则搞一个空的json结构
 	if len(respBody) == 0 {
 		respBody = []byte("{}")
 	}
-
+	// 如果是version 1.0 版本的话这样操作
 	if resp.Header.Get("X-NSQ-Content-Type") == "nsq; version=1.0" {
 		return json.Unmarshal(respBody, ret)
 	}
-
+	// 不是1.0版本的要在外面包一层
 	wResp := &wrappedResp{
 		Data: ret,
 	}
-
 	if err = json.Unmarshal(respBody, wResp); err != nil {
 		return err
 	}
-
 	// wResp.StatusCode here is equal to resp.StatusCode, so ignore it
 	return nil
 }
