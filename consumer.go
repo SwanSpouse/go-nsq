@@ -902,9 +902,7 @@ func (r *Consumer) resume() {
 	r.rngMtx.Unlock()
 	choice := conns[idx]
 
-	r.log(LogLevelWarning,
-		"(%s) backoff timeout expired, sending RDY 1",
-		choice.String())
+	r.log(LogLevelWarning, "(%s) backoff timeout expired, sending RDY 1", choice.String())
 
 	// while in backoff only ever let 1 message at a time through
 	err := r.updateRDY(choice, 1)
@@ -914,7 +912,6 @@ func (r *Consumer) resume() {
 		r.backoff(time.Second)
 		return
 	}
-
 	atomic.StoreInt64(&r.backoffDuration, 0)
 }
 
