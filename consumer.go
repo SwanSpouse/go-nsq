@@ -90,10 +90,12 @@ type Consumer struct {
 	messagesReceived uint64 // 收到的消息
 	messagesFinished uint64 // 完成的消息
 	messagesRequeued uint64 // 重新入队的消息
-	totalRdyCount    int64
-	backoffDuration  int64 // 补偿时延
-	backoffCounter   int32 // 补偿计数
-	maxInFlight      int32 // 处理中的消息
+
+	// 这个是总的Rdy；一个RDY是connection维度的；这个Rdy是consumer维度的；
+	totalRdyCount   int64 // 来计算可接收消息数量，它永远不会大于 maxInFlight，每当收到一个消息后会对其减 1。
+	backoffDuration int64 // 补偿时延
+	backoffCounter  int32 // 补偿计数
+	maxInFlight     int32 // 最多允许的处理中的消息数量
 
 	mtx sync.RWMutex // 锁
 
@@ -127,7 +129,7 @@ type Consumer struct {
 
 	// used at connection close to force a possible reconnect
 	lookupdRecheckChan chan int
-	lookupdHTTPAddrs   []string // NSQLookupd地址列表
+	lookupdHTTPAddrs   []string // NSQLookupd地址列表 多个
 	lookupdQueryIndex  int      // 取上面地址列表中的哪一个lookupd连接
 
 	wg              sync.WaitGroup
@@ -309,7 +311,7 @@ func (r *Consumer) IsStarved() bool {
 	return false
 }
 
-// 获取当前正在处理的消息数
+// 获取最多能够处理的消息条数
 func (r *Consumer) getMaxInFlight() int32 {
 	return atomic.LoadInt32(&r.maxInFlight)
 }
@@ -347,7 +349,7 @@ func (r *Consumer) ConnectToNSQLookupd(addr string) error {
 	if atomic.LoadInt32(&r.runningHandlers) == 0 {
 		return errors.New("no handlers")
 	}
-	// 验证addr是否有效
+	// 验证addr是否有效 单纯的验证地址是否有效
 	if err := validatedLookupAddr(addr); err != nil {
 		return err
 	}
@@ -483,9 +485,9 @@ func (r *Consumer) nextLookupdEndpoint() string {
 }
 
 type lookupResp struct {
-	Channels  []string    `json:"channels"`  // topic下的所有channel
+	Channels  []string    `json:"channels"`  // topic下的所有channel TODO @limingji 这里这个Channel没有用到呢？
 	Producers []*peerInfo `json:"producers"` // 对应的producer
-	Timestamp int64       `json:"timestamp"` // 时间戳
+	Timestamp int64       `json:"timestamp"` // 时间戳 // TODO @limingji 还有这里这个时间戳
 }
 
 type peerInfo struct {
@@ -537,6 +539,7 @@ retry:
 	// 这里要连接所有的NSQD？
 	for _, addr := range nsqdAddrs {
 		err = r.ConnectToNSQD(addr)
+		// 重复连接不报错
 		if err != nil && err != ErrAlreadyConnected {
 			r.log(LogLevelError, "(%s) error connecting to nsqd - %s", addr, err)
 			continue
@@ -549,6 +552,7 @@ retry:
 // It is recommended to use ConnectToNSQLookupd so that topics are discovered
 // automatically.  This method is useful when you want to connect to local instance.
 func (r *Consumer) ConnectToNSQDs(addresses []string) error {
+	// 按照给定的地址一次连接NSQD
 	for _, addr := range addresses {
 		err := r.ConnectToNSQD(addr)
 		if err != nil {
@@ -563,6 +567,7 @@ func (r *Consumer) ConnectToNSQDs(addresses []string) error {
 // It is recommended to use ConnectToNSQLookupd so that topics are discovered
 // automatically.  This method is useful when you want to connect to a single, local,
 // instance.
+// TODO @limingji 没有一个退出机制呢？如果NSQD被重启过；原来失效的那个连接怎么办呢？
 func (r *Consumer) ConnectToNSQD(addr string) error {
 	// 如果consumer已经退出，则放弃连接
 	if atomic.LoadInt32(&r.stopFlag) == 1 {
@@ -576,10 +581,10 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 	atomic.StoreInt32(&r.connectedFlag, 1)
 	// 创建一个连接
 	conn := NewConn(addr, &r.config, &consumerConnDelegate{r})
+	// 设置log level
 	conn.SetLoggerLevel(r.getLogLevel())
 	for index := range r.logger {
-		conn.SetLoggerForLevel(r.logger[index], LogLevel(index),
-			fmt.Sprintf("%3d [%s/%s] (%%s)", r.id, r.topic, r.channel))
+		conn.SetLoggerForLevel(r.logger[index], LogLevel(index), fmt.Sprintf("%3d [%s/%s] (%%s)", r.id, r.topic, r.channel))
 	}
 	// 判断当前地址是否已经连接上了
 	r.mtx.Lock()
@@ -591,12 +596,14 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 	}
 	// 塞入当前正在连接map
 	r.pendingConnections[addr] = conn
+	// 如果没有在TCPAddress里面，则把要链接的地址放到里面去
 	if idx := indexOf(addr, r.nsqdTCPAddrs); idx == -1 {
 		r.nsqdTCPAddrs = append(r.nsqdTCPAddrs, addr)
 	}
 	r.mtx.Unlock()
-
+	// 尝试链接当前地址
 	r.log(LogLevelInfo, "(%s) connecting to nsqd", addr)
+	// 清理函数
 	cleanupConnection := func() {
 		r.mtx.Lock()
 		delete(r.pendingConnections, addr)
@@ -738,12 +745,13 @@ func (r *Consumer) onConnIOError(c *Conn, err error) {
 
 func (r *Consumer) onConnClose(c *Conn) {
 	var hasRDYRetryTimer bool
-
 	// remove this connections RDY count from the consumer's total
 	rdyCount := c.RDY()
+	// 把当前connection还可以处理的rdyCount从consumer总的里面减下去
 	atomic.AddInt64(&r.totalRdyCount, -rdyCount)
 
 	r.rdyRetryMtx.Lock()
+	// 关闭timer
 	if timer, ok := r.rdyRetryTimers[c.String()]; ok {
 		// stop any pending retry of an old RDY update
 		timer.Stop()
@@ -915,6 +923,7 @@ func (r *Consumer) inBackoff() bool {
 	return atomic.LoadInt32(&r.backoffCounter) > 0
 }
 
+// 补偿超时？
 func (r *Consumer) inBackoffTimeout() bool {
 	return atomic.LoadInt64(&r.backoffDuration) > 0
 }
@@ -933,6 +942,7 @@ func (r *Consumer) maybeUpdateRDY(conn *Conn) {
 	r.updateRDY(conn, count)
 }
 
+// 流量控制
 func (r *Consumer) rdyLoop() {
 	redistributeTicker := time.NewTicker(r.config.RDYRedistributeInterval)
 	for {
@@ -960,7 +970,7 @@ func (r *Consumer) updateRDY(c *Conn, count int64) error {
 	if count > c.MaxRDY() {
 		count = c.MaxRDY()
 	}
-
+	// 下面这一大块逻辑都是在算count
 	// stop any pending retry of an old RDY update
 	r.rdyRetryMtx.Lock()
 	if timer, ok := r.rdyRetryTimers[c.String()]; ok {
@@ -990,18 +1000,21 @@ func (r *Consumer) updateRDY(c *Conn, count int64) error {
 		}
 		return ErrOverMaxInFlight
 	}
-
 	return r.sendRDY(c, count)
 }
 
+// 标识consumer要多少条消息
 func (r *Consumer) sendRDY(c *Conn, count int64) error {
+	// 和上次一样的话就不用重复发送请求了
 	if count == 0 && c.LastRDY() == 0 {
 		// no need to send. It's already that RDY count
 		return nil
 	}
-
+	// 当前的总能处理的数量是count；已经告诉Nsqd的是RDY；所以只需要给totalRdy+ count-c.RDY就好了
 	atomic.AddInt64(&r.totalRdyCount, count-c.RDY())
+	// 告诉NSQD 还要count条消息
 	c.SetRDY(count)
+	// 发送命令
 	err := c.WriteCommand(Ready(int(count)))
 	if err != nil {
 		r.log(LogLevelError, "(%s) error sending RDY %d - %s", c.String(), count, err)
@@ -1010,8 +1023,8 @@ func (r *Consumer) sendRDY(c *Conn, count int64) error {
 	return nil
 }
 
-// 重新分配RDY字段
-// 流量控制
+// 流量控制 重新分配RDY字段
+// TODO @limingji 这个函数没咋看懂
 func (r *Consumer) redistributeRDY() {
 	if r.inBackoffTimeout() {
 		return
@@ -1023,47 +1036,61 @@ func (r *Consumer) redistributeRDY() {
 	if len(conns) == 0 {
 		return
 	}
+	// 如果连接数大于consumer最多支持在处理的消息数；
+	// e.g. 如果有5个conn，然后最多支持在处理的消息数是4条；则需要重新分配RDY字段
 	maxInFlight := r.getMaxInFlight()
 	if len(conns) > int(maxInFlight) {
 		r.log(LogLevelDebug, "redistributing RDY state (%d conns > %d max_in_flight)", len(conns), maxInFlight)
 		atomic.StoreInt32(&r.needRDYRedistributed, 1)
 	}
-
+	// TODO @limingji 这个的意思是在补偿中？
 	if r.inBackoff() && len(conns) > 1 {
 		r.log(LogLevelDebug, "redistributing RDY state (in backoff and %d conns > 1)", len(conns))
 		atomic.StoreInt32(&r.needRDYRedistributed, 1)
 	}
-
+	// 不需要调整的话直接就返回了
 	if !atomic.CompareAndSwapInt32(&r.needRDYRedistributed, 1, 0) {
 		return
 	}
-
+	// 所有可能的连接？
 	possibleConns := make([]*Conn, 0, len(conns))
 	for _, c := range conns {
+		// 距离上一次收到消息的时间
 		lastMsgDuration := time.Now().Sub(c.LastMessageTime())
+		// 距离上一次发送rdy的时间
 		lastRdyDuration := time.Now().Sub(c.LastRdyTime())
+		// 获取当前的rdy
 		rdyCount := c.RDY()
+		// 翻译过来就是：addr的nsqd 上一次同意接收了rdyCount条消息；然后距离上一次处理消息过去了lastMsgDuration这么长时间
 		r.log(LogLevelDebug, "(%s) rdy: %d (last message received %s)", c.String(), rdyCount, lastMsgDuration)
+		// 如果当前conn还能处理的消息数大于0
 		if rdyCount > 0 {
+			// 距离上一次处理消息的时间已经超过了空转超时时间；则把当前的conn关闭
 			if lastMsgDuration > r.config.LowRdyIdleTimeout {
 				r.log(LogLevelDebug, "(%s) idle connection, giving up RDY", c.String())
+				// rdy = 0 表示不再接受消息
 				r.updateRDY(c, 0)
 			} else if lastRdyDuration > r.config.LowRdyTimeout {
+				// 如果距离上一次同步RDY信息已经超时时间；则把当前的conn关闭
 				r.log(LogLevelDebug, "(%s) RDY timeout, giving up RDY", c.String())
 				r.updateRDY(c, 0)
 			}
 		}
+		// TODO @limingji possibleConns 不是和 conns相等了吗？这里也没有过滤逻辑啊。
 		possibleConns = append(possibleConns, c)
 	}
-
+	//  可以的最多处理消息的数量 = 最多处理消息的数量 - 已经申请处理消息的数量
 	availableMaxInFlight := int64(maxInFlight) - atomic.LoadInt64(&r.totalRdyCount)
+	// TODO @LIMINGJI ???
 	if r.inBackoff() {
 		availableMaxInFlight = 1 - atomic.LoadInt64(&r.totalRdyCount)
 	}
 
+	// 随机关闭 ？
 	for len(possibleConns) > 0 && availableMaxInFlight > 0 {
 		availableMaxInFlight--
 		r.rngMtx.Lock()
+		// 随机算一个conn出来
 		i := r.rng.Int() % len(possibleConns)
 		r.rngMtx.Unlock()
 		c := possibleConns[i]

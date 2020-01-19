@@ -21,7 +21,7 @@ import (
 // IdentifyResponse represents the metadata
 // returned from an IDENTIFY command to nsqd
 type IdentifyResponse struct {
-	MaxRdyCount  int64 `json:"max_rdy_count"`
+	MaxRdyCount  int64 `json:"max_rdy_count"` // 这个值居然是在identify里面和nsqd进行沟通的
 	TLSv1        bool  `json:"tls_v1"`
 	Deflate      bool  `json:"deflate"`
 	Snappy       bool  `json:"snappy"`
@@ -48,11 +48,13 @@ type msgResponse struct {
 // Conn exposes a set of callbacks for the
 // various events that occur on a connection
 type Conn struct {
+	// 它被放置在一个 RDY 为 0 状态。这意味着，还没有信息被发送到客户端。当客户端已准备好接收消息发送，更新它的命令 RDY 状态到它准备处理的数量，
+	//比如 100。无需任何额外的指令，当 100 条消息可用时，将被传递到客户端（服务器端为那个客户端每次递减
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 	messagesInFlight int64 // 在处理中的消息条数
-	maxRdyCount      int64 // 默认2500 和nsqd协商之后的最大连接数???
+	maxRdyCount      int64 // 默认2500 和NSQD沟通，每个connection发送的消息不要超过这个数字
 	rdyCount         int64 // 用于流量控制； rdyCount表示客户端还可以接受多少条消息
-	lastRdyTimestamp int64
+	lastRdyTimestamp int64 // 上次更新rdy的时间
 	lastMsgTimestamp int64 // 上次处理消息的时间
 
 	mtx sync.Mutex
@@ -219,6 +221,7 @@ func (c *Conn) Connect() (*IdentifyResponse, error) {
 func (c *Conn) Close() error {
 	atomic.StoreInt32(&c.closeFlag, 1)
 	// 如果这里的messageInFlight!=0的话就不关闭吗？
+	// 如果messagesInFlight != 0 说明还有正在进行处理的消息
 	if c.conn != nil && atomic.LoadInt64(&c.messagesInFlight) == 0 {
 		return c.conn.CloseRead()
 	}
@@ -246,12 +249,14 @@ func (c *Conn) LastRDY() int64 {
 func (c *Conn) SetRDY(rdy int64) {
 	atomic.StoreInt64(&c.rdyCount, rdy)
 	if rdy > 0 {
+		// 更新LastRdy的时间戳
 		atomic.StoreInt64(&c.lastRdyTimestamp, time.Now().UnixNano())
 	}
 }
 
 // MaxRDY returns the nsqd negotiated maximum
 // RDY count that it will accept for this connection
+// consumer每次最多消费消息的条数
 func (c *Conn) MaxRDY() int64 {
 	return c.maxRdyCount
 }
@@ -275,6 +280,7 @@ func (c *Conn) RemoteAddr() net.Addr {
 
 // String returns the fully-qualified address
 func (c *Conn) String() string {
+	// nsqd的地址
 	return c.addr
 }
 
@@ -564,7 +570,7 @@ func (c *Conn) readLoop() {
 			// 消息也有一个代理
 			msg.Delegate = delegate
 			msg.NSQDAddress = c.String()
-			// 处理的消息数据
+			// 处理中的消息条数+1
 			atomic.AddInt64(&c.messagesInFlight, 1)
 			atomic.StoreInt64(&c.lastMsgTimestamp, time.Now().UnixNano())
 			// 收到消息的代理
@@ -614,7 +620,7 @@ func (c *Conn) writeLoop() {
 		case resp := <-c.msgResponseChan:
 			// 消息发送出去之后会在这里接收到返回值
 			// Decrement this here so it is correct even if we can't respond to nsqd
-			// 这个是代表在处理中的消息
+			// 处理中的消息数-1
 			msgsInFlight := atomic.AddInt64(&c.messagesInFlight, -1)
 			// 写入成功
 			if resp.success {
@@ -709,12 +715,14 @@ func (c *Conn) cleanup() {
 		var msgsInFlight int64
 		select {
 		case <-c.msgResponseChan:
+			// 处理中的消息数-1
 			msgsInFlight = atomic.AddInt64(&c.messagesInFlight, -1)
 		case <-ticker.C:
 			msgsInFlight = atomic.LoadInt64(&c.messagesInFlight)
 		}
 		if msgsInFlight > 0 {
 			if time.Now().Sub(lastWarning) > time.Second {
+				// 这里进行提示，还有msgsInFlight条消息没有处理完。
 				c.log(LogLevelWarning, "draining... waiting for %d messages in flight", msgsInFlight)
 				lastWarning = time.Now()
 			}
